@@ -1,0 +1,98 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -827,6 +827,50 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             TabModel currentTabModel = mTabModelSelector.getCurrentModel();
+             initializeChromeAndroidTask(
+                     BrowserWindowType.NORMAL, mTabModelSelector.getModel(false), mMultiInstanceManager);
++
++            android.content.SharedPreferences appPreferences =
++                    org.chromium.base.ContextUtils.getAppSharedPreferences();
++            if (!appPreferences.getBoolean("lingti_first_run_bootstrapped", false)) {
++                appPreferences
++                        .edit()
++                        .putBoolean("lingti_first_run_bootstrapped", true)
++                        .putBoolean("lingti_first_run_google_redirect_pending", true)
++                        .apply();
++
++                org.chromium.components.search_engines.TemplateUrlService templateUrlService =
++                        org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory
++                                .getForProfile(currentTabModel.getProfile());
++                templateUrlService.runWhenLoaded(
++                        () -> {
++                            templateUrlService.setSearchEngine("google.com");
++                        });
++            }
++
++            getActivityTabProvider().asObservable().addObserver(
++                    (tab) -> {
++                        if (tab == null
++                                || !appPreferences.getBoolean(
++                                        "lingti_first_run_google_redirect_pending", false)) {
++                            return;
++                        }
++                        tab.addObserver(new org.chromium.chrome.browser.tab.EmptyTabObserver() {
++                            @Override
++                            public void onPageLoadFinished(
++                                    org.chromium.chrome.browser.tab.Tab currentTab,
++                                    org.chromium.url.GURL url) {
++                                String spec = url.getSpec();
++                                if (!"https://google.com/".equals(spec)
++                                        && !"https://google.com".equals(spec)
++                                        && !"https://www.google.com".equals(spec)
++                                        && !"https://www.google.com/".equals(spec)) {
++                                    return;
++                                }
++                                appPreferences.edit()
++                                        .putBoolean("lingti_first_run_google_redirect_pending", false)
++                                        .apply();
++                                currentTab.removeObserver(this);
++                                currentTab.getWebContents().getNavigationController().loadUrl(
++                                        new org.chromium.content_public.browser.LoadUrlParams("https://gemini.google.com"));
++                            }
++                        });
++                    });
+ 
+             ProfileManager.addObserver(
+                 new ProfileManager.Observer() {
+                     @Override
+                     public void onProfileAdded(Profile profile) {}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
+@@ -231,7 +231,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
+     /** Creates first page and sets up adapter. Should result UI being shown on the screen. */
+     private void createFirstPage() {
+-        BooleanSupplier showWelcomePage = () -> !FirstRunStatus.shouldSkipWelcomePage();
++        BooleanSupplier showWelcomePage = () -> false;
+         mPages.add(new FirstRunPage<>(ToSAndUMAFirstRunFragment.class, showWelcomePage));
+         mFreProgressStates.add(MobileFreProgress.WELCOME_SHOWN);
+         mPagerAdapter = new FirstRunPagerAdapter(FirstRunActivity.this, mPages);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java
+@@ -70,7 +70,7 @@ public abstract class FirstRunFlowSequencer {
+         /** @return true if the Search Engine promo page should be shown. */
+         @VisibleForTesting
+         public boolean shouldShowSearchEnginePage() {
+-            return true;
++            return false;
+         }
+     }
+@@ -152,6 +152,7 @@ public abstract class FirstRunFlowSequencer {
+     public void updateFirstRunProperties(Bundle freProperties) {
+         if (freProperties == null)
+           throw new RuntimeException("attempting to update null FRE properties");
++        FirstRunStatus.setSkipWelcomePage(true);
+         assert freProperties != null;
+         freProperties.putBoolean(
+                 FirstRunActivity.SHOW_HISTORY_SYNC_PAGE, shouldShowHistorySyncOptIn());
+diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -572,4 +572,4 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
+     if (session_startup_pref.type == SessionStartupPref::LAST_AND_URLS) {
+       StartupTabs new_tabs;
+-      new_tabs.emplace_back(GURL(chrome::kChromeUINewTabURL));
++      new_tabs.emplace_back(GURL("https://google.com"));
+       AppendTabs(new_tabs, &tabs);
